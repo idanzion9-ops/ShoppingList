@@ -21,51 +21,38 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * חלון הקשבה קולי. האפליקציה עצמה מנהלת את זמני ההקשבה
- * (ולא שירות הדיבור של הטלפון, שנוטה לעצור מהר מדי):
- *  - WAIT_START_MS: כמה זמן לחכות שיתחילו לדבר
- *  - SILENCE_END_MS: כמה שניות שקט אחרי הדיבור עד סיום ההקלטה
- * אם שירות הדיבור נעצר באמצע – ההקשבה מתחדשת אוטומטית והטקסט מצטבר.
+ * חלון הקשבה קולי (המנגנון של גרסה 1.2 שעבד, עם 3 שניות שקט אחרי הדיבור).
+ * מהווידג'ט: שומר את הפריט ונסגר בלי לפתוח את האפליקציה.
+ * מתוך האפליקציה (EXTRA_RETURN): מחזיר את הטקסט לאפליקציה.
  */
 public class VoiceActivity extends Activity implements RecognitionListener {
     public static final String EXTRA_RETURN = "return_result";
     public static final String EXTRA_TEXT = "text";
     private static final int REQ_PERM = 31;
     private static final int REQ_FALLBACK = 32;
-
-    /** זמן המתנה לתחילת הדיבור */
-    private static final long WAIT_START_MS = 2000;
-    /** זמן שקט אחרי הדיבור עד סיום ההקלטה */
-    private static final long SILENCE_END_MS = 3000;
+    /** כמה זמן לחכות שיתחילו לדבר (מילישניות) */
+    private static final long WAIT_MS = 15000;
+    /** כמה שקט אחרי הדיבור עד סיום ההקלטה */
+    private static final long SILENCE_MS = 3000;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private SpeechRecognizer recognizer;
-    private ComponentName service;
-    private TextView status, heard, mic;
-    private boolean returnMode;
-
-    private boolean active;        // אנחנו בתוך סשן הקשבה
-    private boolean done;          // נמסר / בוטל
-    private long deadline;
-    private long sessionStart;         // מתי לסיים אם לא יהיה דיבור נוסף (0 = עוד לא מוכן)
-    private final StringBuilder collected = new StringBuilder();
-    private String partial = "";
-
-    private final Runnable checker = new Runnable() {
+    private long startTime;
+    private boolean speaking;
+    private final Runnable ticker = new Runnable() {
         @Override public void run() {
-            if (done || !active) return;
-            long now = System.currentTimeMillis();
-            // אם השירות מתעכב בהתחברות – לא מחכים לנצח
-            if (deadline == 0 && now - sessionStart > 5000) deadline = now + WAIT_START_MS;
-            if (deadline > 0 && now >= deadline) { finishListening(); return; }
-            if (deadline > 0) {
-                long left = (deadline - now + 999) / 1000;
-                boolean any = collected.length() > 0 || !partial.isEmpty();
-                status.setText(any ? "ממשיך להקשיב… (" + left + ")" : "מקשיב… דברו עכשיו (" + left + ")");
-            }
-            handler.postDelayed(this, 200);
+            if (done || !listening || speaking) return;
+            long left = (WAIT_MS - (System.currentTimeMillis() - startTime)) / 1000;
+            if (left < 0) left = 0;
+            status.setText("מקשיב… דברו עכשיו (" + left + ")");
+            handler.postDelayed(this, 1000);
         }
     };
+
+    private SpeechRecognizer recognizer;
+    private TextView status, heard, mic;
+    private boolean returnMode;
+    private boolean listening;
+    private boolean done;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,14 +65,14 @@ public class VoiceActivity extends Activity implements RecognitionListener {
 
         findViewById(R.id.voice_root).setOnClickListener(v -> cancel());
         findViewById(R.id.voice_cancel).setOnClickListener(v -> cancel());
-        // לחיצה על המיקרופון: בזמן הקשבה – מסיים מיד; אחרת – מתחיל מחדש
-        mic.setOnClickListener(v -> { if (active) finishListening(); else startSession(); });
+        mic.setOnClickListener(v -> { if (!listening) start(); else if (recognizer != null) recognizer.stopListening(); });
+        startTime = System.currentTimeMillis();
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             status.setText("צריך אישור להשתמש במיקרופון");
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_PERM);
         } else {
-            startSession();
+            start();
         }
     }
 
@@ -93,82 +80,8 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode != REQ_PERM) return;
-        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) startSession();
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) start();
         else fallback();
-    }
-
-    /* ---------- ניהול סשן ---------- */
-
-    private void startSession() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) { fallback(); return; }
-        if (service == null) service = pickService();
-        collected.setLength(0);
-        partial = "";
-        heard.setText("");
-        status.setText("מתחבר…");
-        deadline = 0;
-        sessionStart = System.currentTimeMillis();
-        active = true;
-        handler.removeCallbacks(checker);
-        handler.post(checker);
-        listen();
-    }
-
-    /** מתחיל הקשבה עם מזהה דיבור חדש (מונע תקלות "עסוק" בהפעלה חוזרת) */
-    private void listen() {
-        if (done || !active) return;
-        destroyRecognizer();
-        try {
-            recognizer = service != null
-                    ? SpeechRecognizer.createSpeechRecognizer(this, service)
-                    : SpeechRecognizer.createSpeechRecognizer(this);
-            recognizer.setRecognitionListener(this);
-            recognizer.startListening(recognizeIntent());
-        } catch (Exception e) {
-            active = false;
-            fallback();
-        }
-    }
-
-    private void restartSoon() {
-        handler.postDelayed(this::listen, 150);
-    }
-
-    private void extendDeadline() {
-        deadline = System.currentTimeMillis() + SILENCE_END_MS;
-    }
-
-    private String fullText() {
-        String t = collected.toString().trim();
-        String p = partial.trim();
-        if (p.isEmpty()) return t;
-        return t.isEmpty() ? p : t + " " + p;
-    }
-
-    private void finishListening() {
-        active = false;
-        handler.removeCallbacks(checker);
-        String text = fullText();
-        destroyRecognizer();
-        resetMic();
-        if (!text.isEmpty()) {
-            deliver(text);
-        } else {
-            status.setText("לא נקלט דיבור. לחצו על 🎤 לנסות שוב");
-        }
-    }
-
-    private void destroyRecognizer() {
-        if (recognizer != null) {
-            try { recognizer.cancel(); } catch (Exception ignored) { }
-            try { recognizer.destroy(); } catch (Exception ignored) { }
-            recognizer = null;
-        }
-    }
-
-    private void resetMic() {
-        mic.setScaleX(1f);
-        mic.setScaleY(1f);
     }
 
     /** מעדיף שירות זיהוי של Google (תומך בעברית), אחרת ברירת המחדל של הטלפון */
@@ -194,10 +107,39 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
         i.putExtra(RecognizerIntent.EXTRA_PROMPT, "מה להוסיף לרשימה?");
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_END_MS);
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_END_MS);
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 4000L);
+        // 3 שניות שקט אחרי הדיבור לפני סיום ההקלטה
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS);
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS);
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L);
         return i;
+    }
+
+    private void start() {
+        startTime = System.currentTimeMillis();
+        heard.setText("");
+        listen();
+    }
+
+    /** מתחיל (או מחדש) הקשבה בלי לאפס את חלון ההמתנה */
+    private void listen() {
+        if (done) return;
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) { fallback(); return; }
+        try {
+            if (recognizer == null) {
+                ComponentName svc = pickService();
+                recognizer = svc != null
+                        ? SpeechRecognizer.createSpeechRecognizer(this, svc)
+                        : SpeechRecognizer.createSpeechRecognizer(this);
+                recognizer.setRecognitionListener(this);
+            }
+            if (System.currentTimeMillis() - startTime < 500) status.setText("מתחבר…");
+            listening = true;
+            speaking = false;
+            mic.setAlpha(1f);
+            recognizer.startListening(recognizeIntent());
+        } catch (Exception e) {
+            fallback();
+        }
     }
 
     /** גיבוי: מסך הדיבור המובנה של הטלפון, אם קיים */
@@ -205,6 +147,7 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         try {
             startActivityForResult(recognizeIntent(), REQ_FALLBACK);
         } catch (ActivityNotFoundException e) {
+            listening = false;
             status.setText("לא נמצא שירות זיהוי דיבור בטלפון.\nהתקינו או הפעילו את אפליקציית Google מחנות Play ונסו שוב.");
         }
     }
@@ -238,7 +181,6 @@ public class VoiceActivity extends Activity implements RecognitionListener {
 
     private void cancel() {
         done = true;
-        active = false;
         setResult(RESULT_CANCELED);
         finish();
         overridePendingTransition(0, 0);
@@ -247,101 +189,86 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
-        destroyRecognizer();
+        if (recognizer != null) {
+            try { recognizer.destroy(); } catch (Exception ignored) { }
+        }
         super.onDestroy();
     }
 
     /* ---------- RecognitionListener ---------- */
-
-    @Override
-    public void onReadyForSpeech(Bundle params) {
-        // הפעם הראשונה שהמיקרופון מוכן: מתחילים לספור את זמן ההמתנה לדיבור
-        if (deadline == 0) deadline = System.currentTimeMillis() + WAIT_START_MS;
+    @Override public void onReadyForSpeech(Bundle params) {
+        handler.removeCallbacks(ticker);
+        ticker.run();
     }
-
-    @Override
-    public void onBeginningOfSpeech() {
-        extendDeadline();
-    }
-
-    @Override
-    public void onRmsChanged(float rmsdB) {
+    @Override public void onBeginningOfSpeech() { speaking = true; status.setText("מקשיב…"); }
+    @Override public void onRmsChanged(float rmsdB) {
         float s = 1f + Math.max(0f, Math.min(rmsdB, 10f)) / 25f;
         mic.setScaleX(s);
         mic.setScaleY(s);
     }
-
     @Override public void onBufferReceived(byte[] buffer) { }
-    @Override public void onEndOfSpeech() { resetMic(); }
+    @Override public void onEndOfSpeech() { status.setText("מעבד…"); mic.setScaleX(1f); mic.setScaleY(1f); }
     @Override public void onEvent(int eventType, Bundle params) { }
 
     @Override
-    public void onPartialResults(Bundle b) {
-        ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (r == null || r.isEmpty()) return;
-        String p = r.get(0) == null ? "" : r.get(0).trim();
-        if (!p.isEmpty() && !p.equals(partial)) {
-            partial = p;
-            extendDeadline();
-            heard.setText(fullText());
-        }
+    public void onPartialResults(Bundle partial) {
+        ArrayList<String> r = partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        if (r != null && !r.isEmpty()) heard.setText(r.get(0));
     }
 
     @Override
-    public void onResults(Bundle b) {
-        if (!active) return;
-        ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        String t = (r != null && !r.isEmpty() && r.get(0) != null) ? r.get(0).trim() : "";
-        if (t.isEmpty()) t = partial.trim();
-        partial = "";
-        if (!t.isEmpty()) {
-            if (collected.length() > 0) collected.append(" ");
-            collected.append(t);
-            heard.setText(collected.toString());
-            extendDeadline(); // ממשיכים להקשיב עוד 3 שניות למקרה שיש המשך
-        }
-        restartSoon();
+    public void onResults(Bundle results) {
+        listening = false;
+        ArrayList<String> r = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        if (r != null && !r.isEmpty() && r.get(0).trim().length() > 0) deliver(r.get(0));
+        else onError(SpeechRecognizer.ERROR_NO_MATCH);
     }
 
     @Override
     public void onError(int error) {
-        if (!active || done) return;
-        resetMic();
-        // מה שכבר נשמע נשמר
-        if (!partial.isEmpty()) {
-            if (collected.length() > 0) collected.append(" ");
-            collected.append(partial);
-            partial = "";
-            heard.setText(collected.toString());
+        listening = false;
+        speaking = false;
+        handler.removeCallbacks(ticker);
+        if (done) return;
+        // כבר נקלטו מילים – משתמשים בהן
+        String partial = heard.getText().toString().trim();
+        if (!partial.isEmpty() && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+            deliver(partial);
+            return;
         }
+        // עדיין לא דיברו – ממשיכים להקשיב עד שנגמר זמן ההמתנה
+        boolean retryable = error == SpeechRecognizer.ERROR_NO_MATCH
+                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                || error == SpeechRecognizer.ERROR_CLIENT
+                || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY;
+        if (retryable && System.currentTimeMillis() - startTime < WAIT_MS) {
+            try { recognizer.cancel(); } catch (Exception ignored) { }
+            handler.postDelayed(this::listen, 300);
+            return;
+        }
+        mic.setScaleX(1f);
+        mic.setScaleY(1f);
+        String msg;
         switch (error) {
             case SpeechRecognizer.ERROR_NO_MATCH:
             case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
-            case SpeechRecognizer.ERROR_CLIENT:
-            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
-                // השירות עצר – ממשיכים להקשיב עד שנגמר הזמן שלנו
-                if (deadline == 0) deadline = System.currentTimeMillis() + WAIT_START_MS;
-                restartSoon();
-                return;
+                msg = "לא נקלט. לחצו על 🎤 ונסו שוב";
+                break;
             case SpeechRecognizer.ERROR_NETWORK:
             case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                if (collected.length() > 0) { finishListening(); return; }
-                active = false;
-                handler.removeCallbacks(checker);
-                status.setText("אין חיבור לאינטרנט. לחצו על 🎤 לנסות שוב");
-                return;
+                msg = "אין חיבור לאינטרנט. לחצו על 🎤 לנסות שוב";
+                break;
             case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
+                fallback();
+                return;
             case 12: // שפה לא נתמכת
             case 13: // שפה לא זמינה
-                active = false;
-                handler.removeCallbacks(checker);
+                status.setText("שירות הדיבור לא תומך בעברית. פותח את שירות הדיבור של הטלפון…");
                 fallback();
                 return;
             default:
-                if (collected.length() > 0) { finishListening(); return; }
-                active = false;
-                handler.removeCallbacks(checker);
-                status.setText("שגיאה בזיהוי (" + error + "). לחצו על 🎤 לנסות שוב");
+                msg = "שגיאה בזיהוי (" + error + "). לחצו על 🎤 לנסות שוב";
         }
+        status.setText(msg);
     }
 }
