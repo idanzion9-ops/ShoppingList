@@ -8,6 +8,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.RecognitionListener;
 import android.speech.RecognitionService;
 import android.speech.RecognizerIntent;
@@ -28,6 +30,21 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     public static final String EXTRA_TEXT = "text";
     private static final int REQ_PERM = 31;
     private static final int REQ_FALLBACK = 32;
+    /** כמה זמן לחכות שיתחילו לדבר (מילישניות) */
+    private static final long WAIT_MS = 15000;
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private long startTime;
+    private boolean speaking;
+    private final Runnable ticker = new Runnable() {
+        @Override public void run() {
+            if (done || !listening || speaking) return;
+            long left = (WAIT_MS - (System.currentTimeMillis() - startTime)) / 1000;
+            if (left < 0) left = 0;
+            status.setText("מקשיב… דברו עכשיו (" + left + ")");
+            handler.postDelayed(this, 1000);
+        }
+    };
 
     private SpeechRecognizer recognizer;
     private TextView status, heard, mic;
@@ -47,6 +64,7 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         findViewById(R.id.voice_root).setOnClickListener(v -> cancel());
         findViewById(R.id.voice_cancel).setOnClickListener(v -> cancel());
         mic.setOnClickListener(v -> { if (!listening) start(); else if (recognizer != null) recognizer.stopListening(); });
+        startTime = System.currentTimeMillis();
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             status.setText("צריך אישור להשתמש במיקרופון");
@@ -87,10 +105,22 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
         i.putExtra(RecognizerIntent.EXTRA_PROMPT, "מה להוסיף לרשימה?");
+        // זמן שקט לפני סיום – מאפשר הפסקות קצרות באמצע משפט
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L);
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L);
         return i;
     }
 
     private void start() {
+        startTime = System.currentTimeMillis();
+        heard.setText("");
+        listen();
+    }
+
+    /** מתחיל (או מחדש) הקשבה בלי לאפס את חלון ההמתנה */
+    private void listen() {
+        if (done) return;
         if (!SpeechRecognizer.isRecognitionAvailable(this)) { fallback(); return; }
         try {
             if (recognizer == null) {
@@ -100,9 +130,9 @@ public class VoiceActivity extends Activity implements RecognitionListener {
                         : SpeechRecognizer.createSpeechRecognizer(this);
                 recognizer.setRecognitionListener(this);
             }
-            heard.setText("");
-            status.setText("מתחבר…");
+            if (System.currentTimeMillis() - startTime < 500) status.setText("מתחבר…");
             listening = true;
+            speaking = false;
             mic.setAlpha(1f);
             recognizer.startListening(recognizeIntent());
         } catch (Exception e) {
@@ -156,6 +186,7 @@ public class VoiceActivity extends Activity implements RecognitionListener {
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
         if (recognizer != null) {
             try { recognizer.destroy(); } catch (Exception ignored) { }
         }
@@ -163,8 +194,11 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     }
 
     /* ---------- RecognitionListener ---------- */
-    @Override public void onReadyForSpeech(Bundle params) { status.setText("מקשיב… דברו עכשיו"); }
-    @Override public void onBeginningOfSpeech() { status.setText("מקשיב…"); }
+    @Override public void onReadyForSpeech(Bundle params) {
+        handler.removeCallbacks(ticker);
+        ticker.run();
+    }
+    @Override public void onBeginningOfSpeech() { speaking = true; status.setText("מקשיב…"); }
     @Override public void onRmsChanged(float rmsdB) {
         float s = 1f + Math.max(0f, Math.min(rmsdB, 10f)) / 25f;
         mic.setScaleX(s);
@@ -191,6 +225,25 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     @Override
     public void onError(int error) {
         listening = false;
+        speaking = false;
+        handler.removeCallbacks(ticker);
+        if (done) return;
+        // כבר נקלטו מילים – משתמשים בהן
+        String partial = heard.getText().toString().trim();
+        if (!partial.isEmpty() && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+            deliver(partial);
+            return;
+        }
+        // עדיין לא דיברו – ממשיכים להקשיב עד שנגמר זמן ההמתנה
+        boolean retryable = error == SpeechRecognizer.ERROR_NO_MATCH
+                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                || error == SpeechRecognizer.ERROR_CLIENT
+                || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY;
+        if (retryable && System.currentTimeMillis() - startTime < WAIT_MS) {
+            try { recognizer.cancel(); } catch (Exception ignored) { }
+            handler.postDelayed(this::listen, 300);
+            return;
+        }
         mic.setScaleX(1f);
         mic.setScaleY(1f);
         String msg;
