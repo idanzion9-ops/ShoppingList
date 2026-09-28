@@ -1,7 +1,7 @@
 /* ===== רשימת קניות – לוגיקה ראשית ===== */
 'use strict';
 
-const APP_VERSION = '2.0.0';          // להעלות בכל עדכון (יחד עם version.json)
+const APP_VERSION = '2.0.1';          // להעלות בכל עדכון (יחד עם version.json)
 const STORE_KEY = 'shoppingList.v1';
 const MAX_HISTORY = 60;
 

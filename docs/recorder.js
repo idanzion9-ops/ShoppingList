@@ -35,13 +35,23 @@
     servicesCache = list;
     return list;
   }
-  // "אוטומטי": שירות Google הראשון (לא אפליקציית Google עצמה), אחרת ברירת המחדל
-  function resolveService(id) {
-    if (id && id !== 'auto') return id;
+  const GQSB = 'com.google.android.googlequicksearchbox';
+  /* "אוטומטי": רשימת שירותים לניסיון לפי הסדר. השירות הראשון שעובד נזכר (autoPick).
+     סדר: מה שעבד בפעם הקודמת › אפליקציית Google › שאר שירותי Google › ברירת המחדל › השאר */
+  function candidates(id) {
+    if (id && id !== 'auto') return [id];
     const l = services();
-    const g = l.find(s => s.pkg.includes('google') && s.pkg !== 'com.google.android.googlequicksearchbox');
-    return g ? g.id : 'default';
+    const out = [];
+    const add = x => { if (x && out.indexOf(x) === -1) out.push(x); };
+    const pick = settings().autoPick;
+    if (pick && (pick === 'default' || l.some(s => s.id === pick))) add(pick);
+    l.filter(s => s.pkg === GQSB).forEach(s => add(s.id));
+    l.filter(s => s.pkg.includes('google')).forEach(s => add(s.id));
+    add('default');
+    l.forEach(s => add(s.id));
+    return out;
   }
+  function resolveService(id) { return candidates(id)[0]; }
   function serviceLabel(id) {
     if (id === 'default') return 'ברירת המחדל של הטלפון';
     if (id === 'system') return 'מסך הדיבור של הטלפון';
@@ -55,8 +65,9 @@
 
   function newSession(test) {
     const st = settings();
+    const cands = candidates(st.service);
     return {
-      test, service: resolveService(st.service),
+      test, auto: st.service === 'auto', cands, ci: 0, service: cands[0], retried10: false,
       startWait: st.startWait * 1000, silence: st.silence * 1000,
       openedAt: Date.now(), lastStart: 0, readyOnce: false,
       deadline: 0, speaking: false, active: false,
@@ -114,6 +125,21 @@
     }));
   }
 
+  // מעבר לשירות הבא ברשימה (במצב אוטומטי). מחזיר false אם אין עוד
+  function nextCandidate() {
+    if (!S || !S.auto || S.ci + 1 >= S.cands.length) return false;
+    A.voiceDestroy();
+    S.ci++;
+    S.service = S.cands[S.ci];
+    S.readyOnce = false; S.deadline = 0; S.restarts = 0; S.retried10 = false;
+    S.openedAt = Date.now();
+    log('› שירות הבא');
+    status('מנסה שירות דיבור אחר…');
+    diag();
+    setTimeout(() => { if (S && S.active) listen(); }, 900);
+    return true;
+  }
+
   // חידוש הקשבה, במרווח של שנייה לפחות מהקודם (אחרת Google חוסם – שגיאה 10)
   function restart(extraDelay) {
     if (!S || !S.active) return;
@@ -127,9 +153,9 @@
     if (!S || !S.active) return;
     const now = Date.now();
     // השירות לא הגיב בכלל
-    if (!S.readyOnce && now - S.openedAt > 7000) {
+    if (!S.readyOnce && now - S.openedAt > 5000) {
       log('אין תגובה');
-      stopWith('שירות הדיבור לא הגיב. נסו שירות אחר בהגדרות');
+      if (!nextCandidate()) stopWith('שירות הדיבור לא הגיב. נסו שירות אחר בהגדרות');
       return;
     }
     if (S.speaking) {
@@ -204,7 +230,11 @@
 
     switch (t) {
       case 'ready':
-        if (!S.readyOnce) { S.readyOnce = true; }
+        if (!S.readyOnce) {
+          S.readyOnce = true;
+          // זוכרים את השירות שעובד
+          if (S.auto && settings().autoPick !== S.service) saveSettings({ autoPick: S.service });
+        }
         if (!S.deadline) S.deadline = now + S.startWait;
         break;
       case 'begin':
@@ -241,8 +271,19 @@
         S.speaking = false;
         setLevel(0);
         if (S.partial) { S.collected.push(S.partial); S.partial = ''; }
+        // השירות נפל לפני שהתחיל להקשיב – מנסים שוב פעם אחת, ואז עוברים לשירות הבא
+        if (!S.readyOnce && [3, 4, 5, 8, 10, 11, 12, 13, -2].indexOf(v) !== -1) {
+          if ([10, 11, 5, 8].indexOf(v) !== -1 && !S.retried10) {
+            S.retried10 = true;
+            A.voiceDestroy();
+            restart(v === 10 ? 2500 : 800);
+            break;
+          }
+          if (nextCandidate()) break;
+        }
         const soft = [5, 6, 7, 8, 11].indexOf(v) !== -1;
         const timeLeft = !S.deadline || now < S.deadline;
+        if ([5, 8, 11].indexOf(v) !== -1) A.voiceDestroy();   // שירות תקוע – יוצרים חדש
         if (v === 10 && S.restarts < 8) { restart(2500); break; }
         if (soft && timeLeft) { if (!S.deadline) S.deadline = now + S.startWait; restart(300); break; }
         if (soft || S.collected.length) { finish(); break; }
@@ -305,7 +346,7 @@
     let html = '';
     if (hasNative) {
       const auto = resolveService('auto');
-      html += `<option value="auto">אוטומטי (${esc(serviceLabel(auto))})</option>`;
+      html += `<option value="auto">אוטומטי – מנסה עד שמוצא שירות שעובד${settings().autoPick ? ' (כרגע: ' + esc(serviceLabel(auto)) + ')' : ''}</option>`;
       html += `<option value="default">ברירת המחדל של הטלפון</option>`;
       services().forEach(s => { html += `<option value="${esc(s.id)}">${esc(s.name)} – ${esc(s.pkg)}</option>`; });
       html += `<option value="system">מסך הדיבור של הטלפון</option>`;
@@ -340,6 +381,14 @@
     const a = A.getLaunchAction();
     if (a) setTimeout(() => window.onNativeAction(a), 300);
   }
+
+  // מעבר חד-פעמי למצב אוטומטי (גרסה 2.0.1)
+  try {
+    if (!localStorage.getItem('voiceAuto201')) {
+      localStorage.setItem('voiceAuto201', '1');
+      if (hasNative && settings().service !== 'auto') saveSettings({ service: 'auto' });
+    }
+  } catch (e) { /* ignore */ }
 
   window.Recorder = {
     open, close, fillSettings,
