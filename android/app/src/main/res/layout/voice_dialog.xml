@@ -58,6 +58,18 @@
             android:text="🎤"
             android:textSize="38sp" />
 
+        <ProgressBar
+            android:id="@+id/voice_level"
+            style="@android:style/Widget.Material.ProgressBar.Horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="12dp"
+            android:layout_marginTop="18dp"
+            android:indeterminate="false"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="#14B8A6"
+            android:progressBackgroundTint="#D5E3E0" />
+
         <TextView
             android:id="@+id/voice_cancel"
             android:layout_width="wrap_content"
@@ -67,5 +79,24 @@
             android:text="ביטול"
             android:textColor="#6B7A76"
             android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/voice_debug"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:textColor="#93A39F"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/voice_switch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:padding="10dp"
+            android:text="🔄 החלף שירות דיבור"
+            android:textColor="#0F766E"
+            android:textSize="14sp" />
     </LinearLayout>
 </FrameLayout>

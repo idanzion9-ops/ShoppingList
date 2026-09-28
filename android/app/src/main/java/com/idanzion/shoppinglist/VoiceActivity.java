@@ -14,6 +14,8 @@ import android.speech.RecognitionListener;
 import android.speech.RecognitionService;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.content.SharedPreferences;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -58,6 +60,12 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     private int restarts;             // כמה פעמים חודשה ההקשבה בסשן הנוכחי
     private static final int MAX_RESTARTS = 5;
 
+    // בדיקה חזותית שהמיקרופון באמת מאזין
+    private ProgressBar level;
+    private TextView debug;
+    private boolean gotReady, gotSound, gotSpeech;
+    private float peakRms = -100f;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -65,6 +73,9 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         status = findViewById(R.id.voice_status);
         heard = findViewById(R.id.voice_heard);
         mic = findViewById(R.id.voice_mic);
+        level = findViewById(R.id.voice_level);
+        debug = findViewById(R.id.voice_debug);
+        findViewById(R.id.voice_switch).setOnClickListener(v -> switchService());
         returnMode = getIntent().getBooleanExtra(EXTRA_RETURN, false);
 
         findViewById(R.id.voice_root).setOnClickListener(v -> cancel());
@@ -117,6 +128,58 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         services.addAll(others);
         if (googleApp != null) services.add(googleApp);
         serviceIndex = 0;
+        // שירות שנבחר ידנית בעבר – ראשון
+        String saved = prefs().getString("voice_service", null);
+        if (saved != null) {
+            for (int i = 0; i < services.size(); i++) {
+                ComponentName cn = services.get(i);
+                String key = cn == null ? "default" : cn.flattenToString();
+                if (saved.equals(key)) { serviceIndex = i; break; }
+            }
+        }
+    }
+
+    private SharedPreferences prefs() {
+        return getSharedPreferences("shopping", MODE_PRIVATE);
+    }
+
+    /** כפתור "החלף שירות דיבור": עובר לשירות הבא, שומר את הבחירה ומתחיל להקשיב */
+    private void switchService() {
+        if (services.isEmpty()) buildServiceList();
+        if (services.size() < 2) { status.setText("יש רק שירות דיבור אחד בטלפון"); return; }
+        serviceIndex = (serviceIndex + 1) % services.size();
+        ComponentName cn = services.get(serviceIndex);
+        prefs().edit().putString("voice_service", cn == null ? "default" : cn.flattenToString()).apply();
+        handler.removeCallbacksAndMessages(null);
+        if (recognizer != null) {
+            try { recognizer.cancel(); } catch (Exception ignored) { }
+            try { recognizer.destroy(); } catch (Exception ignored) { }
+            recognizer = null;
+        }
+        listening = false;
+        done = false;
+        start();
+    }
+
+    private String serviceName() {
+        if (services.isEmpty()) return "";
+        ComponentName cn = services.get(serviceIndex);
+        if (cn == null) return "ברירת המחדל של הטלפון";
+        try {
+            CharSequence label = getPackageManager().getApplicationLabel(
+                    getPackageManager().getApplicationInfo(cn.getPackageName(), 0));
+            return label + "";
+        } catch (Exception e) {
+            return cn.getPackageName();
+        }
+    }
+
+    private void updateDebug() {
+        String n = (serviceIndex + 1) + "/" + services.size();
+        debug.setText("שירות " + n + ": " + serviceName()
+                + "\nמיקרופון מוכן " + (gotReady ? "✓" : "…")
+                + " · קול נקלט " + (gotSound ? "✓" : "—")
+                + " · דיבור זוהה " + (gotSpeech ? "✓" : "—"));
     }
 
     /** מעבר לשירות הבא ברשימה. מחזיר false אם אין עוד */
@@ -150,6 +213,9 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         startTime = System.currentTimeMillis();
         restarts = 0;
         heard.setText("");
+        gotReady = gotSound = gotSpeech = false;
+        peakRms = -100f;
+        level.setProgress(0);
         listen();
     }
 
@@ -167,6 +233,7 @@ public class VoiceActivity extends Activity implements RecognitionListener {
                 recognizer.setRecognitionListener(this);
             }
             if (System.currentTimeMillis() - startTime < 500) status.setText("מתחבר…");
+            updateDebug();
             listening = true;
             speaking = false;
             mic.setAlpha(1f);
@@ -231,11 +298,23 @@ public class VoiceActivity extends Activity implements RecognitionListener {
 
     /* ---------- RecognitionListener ---------- */
     @Override public void onReadyForSpeech(Bundle params) {
+        gotReady = true;
+        updateDebug();
         handler.removeCallbacks(ticker);
         ticker.run();
     }
-    @Override public void onBeginningOfSpeech() { speaking = true; status.setText("מקשיב…"); }
+    @Override public void onBeginningOfSpeech() {
+        speaking = true;
+        gotSpeech = true;
+        updateDebug();
+        status.setText("מקשיב…");
+    }
     @Override public void onRmsChanged(float rmsdB) {
+        // rmsdB בערך בין ‎-2 (שקט) ל-10 (דיבור חזק)
+        int p = (int) Math.max(0, Math.min(100, (rmsdB + 2f) * 8.5f));
+        level.setProgress(p);
+        if (rmsdB > peakRms) peakRms = rmsdB;
+        if (!gotSound && rmsdB > 3f) { gotSound = true; updateDebug(); }
         float s = 1f + Math.max(0f, Math.min(rmsdB, 10f)) / 25f;
         mic.setScaleX(s);
         mic.setScaleY(s);
