@@ -116,9 +116,9 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQ_VOICE || resultCode != RESULT_OK || data == null) return;
-        ArrayList<String> res = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-        if (res == null || res.isEmpty()) return;
-        String js = "window.onVoiceResult && window.onVoiceResult(" + JSONObject.quote(res.get(0)) + ")";
+        String text = data.getStringExtra(VoiceActivity.EXTRA_TEXT);
+        if (text == null || text.isEmpty()) return;
+        String js = "window.onVoiceResult && window.onVoiceResult(" + JSONObject.quote(text) + ")";
         web.evaluateJavascript(js, null);
     }
 
@@ -127,17 +127,10 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void startVoice() {
             runOnUiThread(() -> {
-                Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "he-IL");
-                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "he-IL");
-                i.putExtra(RecognizerIntent.EXTRA_PROMPT, "מה להוסיף לרשימה?");
-                i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-                try {
-                    startActivityForResult(i, REQ_VOICE);
-                } catch (ActivityNotFoundException e) {
-                    Toast.makeText(MainActivity.this, "לא נמצא שירות זיהוי דיבור (אפליקציית Google)", Toast.LENGTH_LONG).show();
-                }
+                Intent i = new Intent(MainActivity.this, VoiceActivity.class);
+                i.putExtra(VoiceActivity.EXTRA_RETURN, true);
+                startActivityForResult(i, REQ_VOICE);
+                overridePendingTransition(0, 0);
             });
         }
 

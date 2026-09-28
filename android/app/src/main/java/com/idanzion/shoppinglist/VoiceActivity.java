@@ -1,49 +1,220 @@
 package com.idanzion.shoppinglist;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.os.Bundle;
+import android.speech.RecognitionListener;
+import android.speech.RecognitionService;
 import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.List;
 
-/** מסך שקוף: מקשיב לדיבור, שומר את הפריט ונסגר – בלי לפתוח את האפליקציה */
-public class VoiceActivity extends Activity {
-    private static final int REQ = 11;
+/**
+ * חלון הקשבה קולי. עובד עם כל שירות זיהוי דיבור שמותקן בטלפון.
+ * מהווידג'ט: שומר את הפריט ונסגר בלי לפתוח את האפליקציה.
+ * מתוך האפליקציה (EXTRA_RETURN): מחזיר את הטקסט לאפליקציה.
+ */
+public class VoiceActivity extends Activity implements RecognitionListener {
+    public static final String EXTRA_RETURN = "return_result";
+    public static final String EXTRA_TEXT = "text";
+    private static final int REQ_PERM = 31;
+    private static final int REQ_FALLBACK = 32;
+
+    private SpeechRecognizer recognizer;
+    private TextView status, heard, mic;
+    private boolean returnMode;
+    private boolean listening;
+    private boolean done;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (savedInstanceState != null) return; // כבר מקשיב
+        setContentView(R.layout.voice_dialog);
+        status = findViewById(R.id.voice_status);
+        heard = findViewById(R.id.voice_heard);
+        mic = findViewById(R.id.voice_mic);
+        returnMode = getIntent().getBooleanExtra(EXTRA_RETURN, false);
+
+        findViewById(R.id.voice_root).setOnClickListener(v -> cancel());
+        findViewById(R.id.voice_cancel).setOnClickListener(v -> cancel());
+        mic.setOnClickListener(v -> { if (!listening) start(); else if (recognizer != null) recognizer.stopListening(); });
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            status.setText("צריך אישור להשתמש במיקרופון");
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_PERM);
+        } else {
+            start();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQ_PERM) return;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) start();
+        else fallback();
+    }
+
+    /** מעדיף שירות זיהוי של Google (תומך בעברית), אחרת ברירת המחדל של הטלפון */
+    private ComponentName pickService() {
+        try {
+            List<ResolveInfo> list = getPackageManager().queryIntentServices(
+                    new Intent(RecognitionService.SERVICE_INTERFACE), 0);
+            for (ResolveInfo ri : list) {
+                if (ri.serviceInfo != null && ri.serviceInfo.packageName.contains("google")) {
+                    return new ComponentName(ri.serviceInfo.packageName, ri.serviceInfo.name);
+                }
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    private Intent recognizeIntent() {
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "he-IL");
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "he-IL");
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "מה להוסיף לרשימה?");
+        i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "מה להוסיף לרשימה?");
+        return i;
+    }
+
+    private void start() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) { fallback(); return; }
         try {
-            startActivityForResult(i, REQ);
+            if (recognizer == null) {
+                ComponentName svc = pickService();
+                recognizer = svc != null
+                        ? SpeechRecognizer.createSpeechRecognizer(this, svc)
+                        : SpeechRecognizer.createSpeechRecognizer(this);
+                recognizer.setRecognitionListener(this);
+            }
+            heard.setText("");
+            status.setText("מתחבר…");
+            listening = true;
+            mic.setAlpha(1f);
+            recognizer.startListening(recognizeIntent());
+        } catch (Exception e) {
+            fallback();
+        }
+    }
+
+    /** גיבוי: מסך הדיבור המובנה של הטלפון, אם קיים */
+    private void fallback() {
+        try {
+            startActivityForResult(recognizeIntent(), REQ_FALLBACK);
         } catch (ActivityNotFoundException e) {
-            Toast.makeText(this, "לא נמצא שירות זיהוי דיבור בטלפון (אפליקציית Google)", Toast.LENGTH_LONG).show();
-            finish();
+            listening = false;
+            status.setText("לא נמצא שירות זיהוי דיבור בטלפון.\nהתקינו או הפעילו את אפליקציית Google מחנות Play ונסו שוב.");
         }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ && resultCode == RESULT_OK && data != null) {
+        if (requestCode != REQ_FALLBACK) return;
+        if (resultCode == RESULT_OK && data != null) {
             ArrayList<String> res = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-            if (res != null && !res.isEmpty() && res.get(0).trim().length() > 0) {
-                String text = res.get(0).trim();
-                Store.addPending(this, text);
-                Toast.makeText(this, "🛒 " + Store.cleanForDisplay(text) + " – נשמר לרשימה", Toast.LENGTH_SHORT).show();
-                ListWidgetProvider.refreshAll(this);
-            }
+            if (res != null && !res.isEmpty()) { deliver(res.get(0)); return; }
+        }
+        cancel();
+    }
+
+    private void deliver(String text) {
+        if (done) return;
+        done = true;
+        text = text == null ? "" : text.trim();
+        if (text.isEmpty()) { cancel(); return; }
+        if (returnMode) {
+            setResult(RESULT_OK, new Intent().putExtra(EXTRA_TEXT, text));
+        } else {
+            Store.addPending(this, text);
+            Toast.makeText(this, "🛒 " + Store.cleanForDisplay(text) + " – נשמר לרשימה", Toast.LENGTH_SHORT).show();
+            ListWidgetProvider.refreshAll(this);
         }
         finish();
         overridePendingTransition(0, 0);
+    }
+
+    private void cancel() {
+        done = true;
+        setResult(RESULT_CANCELED);
+        finish();
+        overridePendingTransition(0, 0);
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (recognizer != null) {
+            try { recognizer.destroy(); } catch (Exception ignored) { }
+        }
+        super.onDestroy();
+    }
+
+    /* ---------- RecognitionListener ---------- */
+    @Override public void onReadyForSpeech(Bundle params) { status.setText("מקשיב… דברו עכשיו"); }
+    @Override public void onBeginningOfSpeech() { status.setText("מקשיב…"); }
+    @Override public void onRmsChanged(float rmsdB) {
+        float s = 1f + Math.max(0f, Math.min(rmsdB, 10f)) / 25f;
+        mic.setScaleX(s);
+        mic.setScaleY(s);
+    }
+    @Override public void onBufferReceived(byte[] buffer) { }
+    @Override public void onEndOfSpeech() { status.setText("מעבד…"); mic.setScaleX(1f); mic.setScaleY(1f); }
+    @Override public void onEvent(int eventType, Bundle params) { }
+
+    @Override
+    public void onPartialResults(Bundle partial) {
+        ArrayList<String> r = partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        if (r != null && !r.isEmpty()) heard.setText(r.get(0));
+    }
+
+    @Override
+    public void onResults(Bundle results) {
+        listening = false;
+        ArrayList<String> r = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        if (r != null && !r.isEmpty() && r.get(0).trim().length() > 0) deliver(r.get(0));
+        else onError(SpeechRecognizer.ERROR_NO_MATCH);
+    }
+
+    @Override
+    public void onError(int error) {
+        listening = false;
+        mic.setScaleX(1f);
+        mic.setScaleY(1f);
+        String msg;
+        switch (error) {
+            case SpeechRecognizer.ERROR_NO_MATCH:
+            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
+                msg = "לא נקלט. לחצו על 🎤 ונסו שוב";
+                break;
+            case SpeechRecognizer.ERROR_NETWORK:
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
+                msg = "אין חיבור לאינטרנט. לחצו על 🎤 לנסות שוב";
+                break;
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
+                fallback();
+                return;
+            case 12: // שפה לא נתמכת
+            case 13: // שפה לא זמינה
+                msg = "שירות הדיבור לא תומך בעברית. פותח את שירות הדיבור של הטלפון…";
+                status.setText(msg);
+                fallback();
+                return;
+            default:
+                msg = "שגיאה בזיהוי (" + error + "). לחצו על 🎤 לנסות שוב";
+        }
+        status.setText(msg);
     }
 }
