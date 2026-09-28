@@ -49,6 +49,8 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     };
 
     private SpeechRecognizer recognizer;
+    private final List<ComponentName> services = new ArrayList<>();
+    private int serviceIndex = 0;
     private TextView status, heard, mic;
     private boolean returnMode;
     private boolean listening;
@@ -84,18 +86,41 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         else fallback();
     }
 
-    /** מעדיף שירות זיהוי של Google (תומך בעברית), אחרת ברירת המחדל של הטלפון */
-    private ComponentName pickService() {
+    /**
+     * סדר העדפה של שירותי זיהוי דיבור:
+     * 1. אפליקציית Google (מקוון – תומך בעברית)
+     * 2. ברירת המחדל של הטלפון
+     * 3. שאר השירותים (כולל שירותים לא-מקוונים שאולי אין בהם עברית)
+     */
+    private void buildServiceList() {
+        services.clear();
+        List<ComponentName> others = new ArrayList<>();
+        ComponentName googleApp = null;
         try {
             List<ResolveInfo> list = getPackageManager().queryIntentServices(
                     new Intent(RecognitionService.SERVICE_INTERFACE), 0);
             for (ResolveInfo ri : list) {
-                if (ri.serviceInfo != null && ri.serviceInfo.packageName.contains("google")) {
-                    return new ComponentName(ri.serviceInfo.packageName, ri.serviceInfo.name);
-                }
+                if (ri.serviceInfo == null) continue;
+                ComponentName cn = new ComponentName(ri.serviceInfo.packageName, ri.serviceInfo.name);
+                if ("com.google.android.googlequicksearchbox".equals(ri.serviceInfo.packageName)) googleApp = cn;
+                else others.add(cn);
             }
         } catch (Exception ignored) { }
-        return null;
+        if (googleApp != null) services.add(googleApp);
+        services.add(null); // ברירת המחדל של הטלפון
+        services.addAll(others);
+        serviceIndex = 0;
+    }
+
+    /** מעבר לשירות הבא ברשימה. מחזיר false אם אין עוד */
+    private boolean nextService() {
+        if (serviceIndex + 1 >= services.size()) return false;
+        serviceIndex++;
+        if (recognizer != null) {
+            try { recognizer.destroy(); } catch (Exception ignored) { }
+            recognizer = null;
+        }
+        return true;
     }
 
     private Intent recognizeIntent() {
@@ -104,6 +129,7 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "he-IL");
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "he-IL");
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
         i.putExtra(RecognizerIntent.EXTRA_PROMPT, "מה להוסיף לרשימה?");
@@ -125,8 +151,9 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         if (done) return;
         if (!SpeechRecognizer.isRecognitionAvailable(this)) { fallback(); return; }
         try {
+            if (services.isEmpty()) buildServiceList();
             if (recognizer == null) {
-                ComponentName svc = pickService();
+                ComponentName svc = services.get(serviceIndex);
                 recognizer = svc != null
                         ? SpeechRecognizer.createSpeechRecognizer(this, svc)
                         : SpeechRecognizer.createSpeechRecognizer(this);
@@ -263,8 +290,14 @@ public class VoiceActivity extends Activity implements RecognitionListener {
                 return;
             case 12: // שפה לא נתמכת
             case 13: // שפה לא זמינה
-                status.setText("שירות הדיבור לא תומך בעברית. פותח את שירות הדיבור של הטלפון…");
-                fallback();
+            case 11: // השירות התנתק (בחלק מהשירותים – אין מודל שפה)
+                if (nextService()) {
+                    status.setText("מחפש שירות דיבור שתומך בעברית…");
+                    startTime = System.currentTimeMillis();
+                    handler.postDelayed(this::listen, 300);
+                } else {
+                    fallback();
+                }
                 return;
             default:
                 msg = "שגיאה בזיהוי (" + error + "). לחצו על 🎤 לנסות שוב";
