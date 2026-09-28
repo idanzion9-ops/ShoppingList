@@ -55,6 +55,8 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     private boolean returnMode;
     private boolean listening;
     private boolean done;
+    private int restarts;             // כמה פעמים חודשה ההקשבה בסשן הנוכחי
+    private static final int MAX_RESTARTS = 5;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,13 +89,15 @@ public class VoiceActivity extends Activity implements RecognitionListener {
     }
 
     /**
-     * סדר העדפה של שירותי זיהוי דיבור:
-     * 1. אפליקציית Google (מקוון – תומך בעברית)
+     * סדר העדפה של שירותי זיהוי דיבור (כמו בגרסה 1.5 שעבדה):
+     * 1. שירות Google הראשון שנמצא בטלפון
      * 2. ברירת המחדל של הטלפון
-     * 3. שאר השירותים (כולל שירותים לא-מקוונים שאולי אין בהם עברית)
+     * 3. שאר השירותים. שירות אפליקציית Google (googlequicksearchbox) אחרון –
+     *    הוא חוסם שימוש מאפליקציות אחרות (שגיאה 10).
      */
     private void buildServiceList() {
         services.clear();
+        List<ComponentName> google = new ArrayList<>();
         List<ComponentName> others = new ArrayList<>();
         ComponentName googleApp = null;
         try {
@@ -101,14 +105,17 @@ public class VoiceActivity extends Activity implements RecognitionListener {
                     new Intent(RecognitionService.SERVICE_INTERFACE), 0);
             for (ResolveInfo ri : list) {
                 if (ri.serviceInfo == null) continue;
-                ComponentName cn = new ComponentName(ri.serviceInfo.packageName, ri.serviceInfo.name);
-                if ("com.google.android.googlequicksearchbox".equals(ri.serviceInfo.packageName)) googleApp = cn;
+                String pkg = ri.serviceInfo.packageName;
+                ComponentName cn = new ComponentName(pkg, ri.serviceInfo.name);
+                if ("com.google.android.googlequicksearchbox".equals(pkg)) googleApp = cn;
+                else if (pkg.contains("google")) google.add(cn);
                 else others.add(cn);
             }
         } catch (Exception ignored) { }
-        if (googleApp != null) services.add(googleApp);
+        services.addAll(google);
         services.add(null); // ברירת המחדל של הטלפון
         services.addAll(others);
+        if (googleApp != null) services.add(googleApp);
         serviceIndex = 0;
     }
 
@@ -129,7 +136,6 @@ public class VoiceActivity extends Activity implements RecognitionListener {
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "he-IL");
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "he-IL");
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
         i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
         i.putExtra(RecognizerIntent.EXTRA_PROMPT, "מה להוסיף לרשימה?");
@@ -142,6 +148,7 @@ public class VoiceActivity extends Activity implements RecognitionListener {
 
     private void start() {
         startTime = System.currentTimeMillis();
+        restarts = 0;
         heard.setText("");
         listen();
     }
@@ -268,9 +275,13 @@ public class VoiceActivity extends Activity implements RecognitionListener {
                 || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
                 || error == SpeechRecognizer.ERROR_CLIENT
                 || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY;
-        if (retryable && System.currentTimeMillis() - startTime < WAIT_MS) {
+        // שגיאה 10 = יותר מדי בקשות: מחכים קצת יותר לפני ניסיון נוסף
+        if (error == 10) retryable = true;
+        if (retryable && restarts < MAX_RESTARTS && System.currentTimeMillis() - startTime < WAIT_MS) {
+            restarts++;
             try { recognizer.cancel(); } catch (Exception ignored) { }
-            handler.postDelayed(this::listen, 300);
+            status.setText("מקשיב… דברו עכשיו");
+            handler.postDelayed(this::listen, error == 10 ? 2500 : 1200);
             return;
         }
         mic.setScaleX(1f);
@@ -299,6 +310,9 @@ public class VoiceActivity extends Activity implements RecognitionListener {
                     fallback();
                 }
                 return;
+            case 10:
+                msg = "שירות הדיבור עמוס רגע. חכו כמה שניות ולחצו על 🎤";
+                break;
             default:
                 msg = "שגיאה בזיהוי (" + error + "). לחצו על 🎤 לנסות שוב";
         }
