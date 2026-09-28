@@ -34,13 +34,6 @@
             </intent-filter>
         </activity>
 
-        <!-- מסך שקוף להזנה קולית מהווידג'ט, בלי לפתוח את האפליקציה -->
-        <activity
-            android:name=".VoiceActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:theme="@style/VoiceTheme" />
 
         <receiver
             android:name=".ListWidgetProvider"

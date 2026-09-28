@@ -25,8 +25,10 @@ public class ListWidgetProvider extends AppWidgetProvider {
     private static void update(Context context, AppWidgetManager manager, int id) {
         RemoteViews v = new RemoteViews(context.getPackageName(), R.layout.widget);
 
-        Intent voice = new Intent(context, VoiceActivity.class);
-        voice.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        // פותח את האפליקציה ישר למצב הקשבה (כל ההיגיון בצד שמתעדכן מגיטהאב)
+        Intent voice = new Intent(context, MainActivity.class);
+        voice.putExtra(MainActivity.EXTRA_ACTION, "voice");
+        voice.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent voicePi = PendingIntent.getActivity(context, 1, voice,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         v.setOnClickPendingIntent(R.id.widget_mic, voicePi);

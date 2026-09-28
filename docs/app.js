@@ -1,7 +1,7 @@
 /* ===== רשימת קניות – לוגיקה ראשית ===== */
 'use strict';
 
-const APP_VERSION = '1.0.0';          // להעלות בכל עדכון (יחד עם version.json)
+const APP_VERSION = '2.0.0';          // להעלות בכל עדכון (יחד עם version.json)
 const STORE_KEY = 'shoppingList.v1';
 const MAX_HISTORY = 60;
 
@@ -159,20 +159,7 @@ function handleVoiceText(text, quiet) {
   return msg;
 }
 
-function startVoice() {
-  if (native && native.startVoice) { native.startVoice(); return; }
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { toast('הזנה קולית זמינה באפליקציה או בדפדפן כרום'); return; }
-  const rec = new SR();
-  rec.lang = 'he-IL';
-  rec.interimResults = false;
-  rec.maxAlternatives = 1;
-  $('micBtn').classList.add('listening');
-  rec.onresult = e => handleVoiceText(e.results[0][0].transcript);
-  rec.onerror = () => toast('לא נקלט קול, נסו שוב');
-  rec.onend = () => $('micBtn').classList.remove('listening');
-  rec.start();
-}
+function startVoice() { window.Recorder.open(); }
 // נקרא מהאפליקציה (אנדרואיד) אחרי זיהוי דיבור
 window.onVoiceResult = text => handleVoiceText(text);
 
@@ -206,7 +193,7 @@ async function checkForUpdate(manual) {
       sessionStorage.setItem(key, v.version);
       if (manual) $('updateStatus').textContent = `נמצאה גרסה ${v.version}, מעדכן…`;
       await clearCaches();
-      location.reload();
+      if (native && native.hardReload) native.hardReload(); else location.reload();
     } else if (manual) {
       $('updateStatus').textContent = 'יש לך את הגרסה האחרונה ✓';
     }
@@ -358,10 +345,12 @@ function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
   window.scrollTo(0, 0);
+  if (name === 'settings' && window.Recorder) window.Recorder.fillSettings();
 }
 
 // נקרא מכפתור "חזור" של אנדרואיד. מחזיר true אם טופל
 window.onBack = function () {
+  if (window.Recorder && window.Recorder.isOpen()) { window.Recorder.close(); return true; }
   if (!$('modal').classList.contains('hidden')) { closeModal(); return true; }
   if (!$('view-list').classList.contains('active')) { showView('list'); return true; }
   return false;
@@ -435,6 +424,12 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- Init ---------- */
 $('webVersion').textContent = APP_VERSION;
+// הודעה אחרי עדכון
+try {
+  const prev = localStorage.getItem('appVersion');
+  if (prev && prev !== APP_VERSION) setTimeout(() => toast(`עודכן לגרסה ${APP_VERSION} ✓`), 600);
+  localStorage.setItem('appVersion', APP_VERSION);
+} catch (e) { /* ignore */ }
 if (native && native.getNativeVersion) {
   $('nativeRow').classList.remove('hidden');
   $('nativeVersion').textContent = native.getNativeVersion();

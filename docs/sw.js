@@ -1,7 +1,7 @@
 /* Service worker: תמיד מנסה להביא את הגרסה העדכנית מהרשת,
    ואם אין קליטה (למשל בסופר) – משתמש בעותק השמור. */
 const CACHE = 'shopping-cache';
-const FILES = ['./', 'index.html', 'style.css', 'voice.js', 'app.js', 'manifest.json', 'icon.svg'];
+const FILES = ['./', 'index.html', 'style.css', 'voice.js', 'app.js', 'recorder.js', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).catch(() => {}));

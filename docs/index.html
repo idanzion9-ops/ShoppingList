@@ -79,9 +79,30 @@
         <h3>עדכונים</h3>
         <p>גרסת תוכן: <b id="webVersion"></b></p>
         <p id="nativeRow" class="hidden">גרסת אפליקציה: <b id="nativeVersion"></b></p>
-        <button id="checkUpdateBtn" class="btn-primary">🔄 בדוק עדכון</button>
+        <button id="checkUpdateBtn" class="btn-primary">🔄 בדוק עדכון ועדכן</button>
         <p id="updateStatus" class="muted"></p>
         <button id="apkUpdateBtn" class="btn-secondary hidden">⬇️ הורד עדכון לאפליקציה</button>
+      </div>
+      <div class="card">
+        <h3>🎤 הקלטה קולית</h3>
+        <label class="field">שירות זיהוי דיבור
+          <select id="voiceService"></select>
+        </label>
+        <label class="field">זמן המתנה לתחילת דיבור
+          <select id="voiceStartWait">
+            <option value="2">2 שניות</option><option value="3">3 שניות</option>
+            <option value="5">5 שניות</option><option value="8">8 שניות</option>
+            <option value="15">15 שניות</option>
+          </select>
+        </label>
+        <label class="field">שקט אחרי הדיבור עד סיום
+          <select id="voiceSilence">
+            <option value="2">2 שניות</option><option value="3">3 שניות</option>
+            <option value="4">4 שניות</option><option value="5">5 שניות</option>
+          </select>
+        </label>
+        <button id="voiceTestBtn" class="btn-secondary">🎤 בדיקת הקלטה (בלי להוסיף לרשימה)</button>
+        <p class="muted">אם הפס לא זז כשמדברים – בחרו שירות אחר ובדקו שוב.</p>
       </div>
       <div class="card">
         <h3>גיבוי</h3>
@@ -108,9 +129,26 @@
     </div>
   </div>
 
+  <!-- Voice panel -->
+  <div id="voicePanel" class="modal hidden">
+    <div class="modal-card voice-card">
+      <h3 id="vpTitle">🛒 מה להוסיף לרשימה?</h3>
+      <div id="vpHeard" class="vp-heard"></div>
+      <div id="vpStatus" class="vp-status">מתחבר…</div>
+      <button id="vpMic" class="vp-mic" aria-label="מיקרופון">🎤</button>
+      <div class="vp-level"><div id="vpLevel"></div></div>
+      <div id="vpDiag" class="vp-diag"></div>
+      <div class="vp-actions">
+        <button id="vpDone" class="btn-primary">סיום והוספה</button>
+        <button id="vpCancel" class="btn-ghost">ביטול</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"><span id="toastText"></span><button id="toastAction" class="toast-action hidden"></button></div>
 
   <script src="voice.js"></script>
   <script src="app.js"></script>
+  <script src="recorder.js"></script>
 </body>
 </html>
