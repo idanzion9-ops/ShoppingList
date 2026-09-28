@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <title>רשימת קניות</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="title-row">
+      <h1>🛒 רשימת קניות</h1>
+      <span id="listDate" class="list-date"></span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-view="list">הרשימה</button>
+      <button class="tab" data-view="history">רשימות קודמות</button>
+      <button class="tab" data-view="settings">הגדרות</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ===== LIST VIEW ===== -->
+    <section id="view-list" class="view active">
+      <form id="addForm" class="add-row" autocomplete="off">
+        <input id="addInput" type="text" placeholder="הוסף פריט…" enterkeyhint="done">
+        <button type="submit" class="btn-add" aria-label="הוסף">＋</button>
+        <button type="button" id="micBtn" class="btn-mic" aria-label="הוספה קולית">🎤</button>
+      </form>
+
+      <div id="suggestBox" class="suggest-box hidden">
+        <div class="suggest-head">
+          <span>💡 המלצות מהקניות הקודמות</span>
+          <button id="suggestToggle" class="link-btn">הסתר</button>
+        </div>
+        <div id="suggestChips" class="chips"></div>
+      </div>
+
+      <div id="progressWrap" class="progress-wrap hidden">
+        <div class="progress-text"><span id="progressText"></span></div>
+        <div class="progress"><div id="progressBar"></div></div>
+      </div>
+
+      <div id="emptyState" class="empty hidden">
+        <div class="empty-icon">🧺</div>
+        <p>הרשימה ריקה</p>
+        <p class="muted">הוסיפו פריטים בהקלדה או בלחיצה על 🎤<br>לדוגמה: "תוסיף בבקשה עגבניות שרי"</p>
+      </div>
+
+      <ul id="todoList" class="items"></ul>
+      <h3 id="cartTitle" class="section-title hidden">✓ בעגלה</h3>
+      <ul id="cartList" class="items in-cart"></ul>
+
+      <div class="list-actions">
+        <button id="finishBtn" class="btn-primary hidden">סיימתי קנייה ✔</button>
+        <div class="row-actions">
+          <button id="shareBtn" class="btn-ghost hidden">📤 שתף רשימה</button>
+          <button id="clearBtn" class="btn-ghost danger hidden">🗑 נקה רשימה</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== HISTORY VIEW ===== -->
+    <section id="view-history" class="view">
+      <div id="historyEmpty" class="empty">
+        <div class="empty-icon">🕘</div>
+        <p>עדיין אין רשימות קודמות</p>
+        <p class="muted">בסוף כל קנייה לחצו "סיימתי קנייה" והרשימה תישמר כאן</p>
+      </div>
+      <ul id="historyList" class="history"></ul>
+    </section>
+
+    <!-- ===== SETTINGS VIEW ===== -->
+    <section id="view-settings" class="view">
+      <div class="card">
+        <h3>עדכונים</h3>
+        <p>גרסת תוכן: <b id="webVersion"></b></p>
+        <p id="nativeRow" class="hidden">גרסת אפליקציה: <b id="nativeVersion"></b></p>
+        <button id="checkUpdateBtn" class="btn-primary">🔄 בדוק עדכון</button>
+        <p id="updateStatus" class="muted"></p>
+        <button id="apkUpdateBtn" class="btn-secondary hidden">⬇️ הורד עדכון לאפליקציה</button>
+      </div>
+      <div class="card">
+        <h3>גיבוי</h3>
+        <p class="muted">הנתונים נשמרים בטלפון. מומלץ לשמור גיבוי מדי פעם.</p>
+        <button id="exportBtn" class="btn-secondary">📤 שמור / שתף גיבוי</button>
+        <button id="importBtn" class="btn-secondary">📥 שחזר מגיבוי</button>
+      </div>
+      <div class="card">
+        <h3>פקודות קוליות</h3>
+        <p class="muted">"תוסיף בבקשה עגבניות שרי"<br>"תוסיף חלב, לחם וביצים"<br>"תמחק את החלב" / "תוריד קוטג'"<br>"סימנתי לחם" – מסמן כנמצא בעגלה</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h3 id="modalTitle"></h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button id="modalOk" class="btn-primary">אישור</button>
+        <button id="modalCancel" class="btn-ghost">ביטול</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"><span id="toastText"></span><button id="toastAction" class="toast-action hidden"></button></div>
+
+  <script src="voice.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
