@@ -11,8 +11,8 @@ android {
         minSdk 26
         targetSdk 34
         // להעלות את versionCode רק כשמשנים קוד אנדרואיד (נדיר), ולעדכן גם את nativeVersion ב-docs/version.json
-        versionCode 3
-        versionName '1.2'
+        versionCode 4
+        versionName '1.3'
     }
 
     signingConfigs {

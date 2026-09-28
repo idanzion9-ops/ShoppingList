@@ -31,20 +31,14 @@ public class ListWidgetProvider extends AppWidgetProvider {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         v.setOnClickPendingIntent(R.id.widget_mic, voicePi);
 
-        Intent open = new Intent(context, MainActivity.class);
-        open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        PendingIntent openPi = PendingIntent.getActivity(context, 2, open,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        v.setOnClickPendingIntent(R.id.widget_open, openPi);
-
-        int count = Store.getCount(context);
-        int pending = Store.pendingCount(context);
-        String status;
-        if (count < 0) status = "לחצו לפתיחה";
-        else if (count == 0) status = "הרשימה ריקה";
-        else status = count + " פריטים לקנות";
-        if (pending > 0) status += " · " + pending + " חדשים";
-        v.setTextViewText(R.id.widget_status, status);
+        // תג קטן: כמה פריטים נשארו לקנות (כולל מה שנאמר בווידג'ט ועוד לא נפתח)
+        int count = Math.max(0, Store.getCount(context)) + Store.pendingCount(context);
+        if (count > 0) {
+            v.setTextViewText(R.id.widget_badge, count > 99 ? "99+" : String.valueOf(count));
+            v.setViewVisibility(R.id.widget_badge, android.view.View.VISIBLE);
+        } else {
+            v.setViewVisibility(R.id.widget_badge, android.view.View.GONE);
+        }
 
         manager.updateAppWidget(id, v);
     }
